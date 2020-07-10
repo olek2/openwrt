@@ -17,3 +17,17 @@ endef
 
 $(eval $(call KernelPackage,i2c-lantiq))
 
+define KernelPackage/switch-lantiq-gswip
+  SUBMENU:=$(NETWORK_DEVICES_MENU)
+  TITLE:=Lantiq xRx200/xRx300 switch support
+  KCONFIG:=CONFIG_NET_DSA_LANTIQ_GSWIP
+  FILES:=$(LINUX_DIR)/drivers/net/dsa/lantiq_gswip.ko
+  AUTOLOAD:=$(call AutoLoad,42,lantiq_gswip)
+endef
+
+define KernelPackage/switch-lantiq-gswip/description
+ Lantiq xRx200/xRx300 switch support
+endef
+
+$(eval $(call KernelPackage,switch-lantiq-gswip))
+
