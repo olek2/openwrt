@@ -1,0 +1,462 @@
+From 9babc34b1248be12ca0ede2e32f825b61b945ef8 Mon Sep 17 00:00:00 2001
+From: Aleksander Jan Bajkowski <A.Bajkowski@stud.elka.pw.edu.pl>
+Date: Sun, 2 May 2021 15:57:14 +0200
+Subject: [PATCH 2/2] test ldma driver
+
+Signed-off-by: Aleksander Jan Bajkowski <A.Bajkowski@stud.elka.pw.edu.pl>
+---
+ drivers/dma/lgm/lgm-dma.c            |  21 ++-
+ drivers/net/ethernet/lantiq_xrx200.c | 271 ++-------------------------
+ 2 files changed, 37 insertions(+), 255 deletions(-)
+
+diff --git a/drivers/dma/lgm/lgm-dma.c b/drivers/dma/lgm/lgm-dma.c
+index d5e322b7e979..d54b3a557c56 100644
+--- a/drivers/dma/lgm/lgm-dma.c
++++ b/drivers/dma/lgm/lgm-dma.c
+@@ -84,8 +84,12 @@
+ #define DMA_PCTRL_RXBL16		BIT(0)
+ #define DMA_PCTRL_TXBL16		BIT(1)
+ #define DMA_PCTRL_RXBL			GENMASK(3, 2)
++#define DMA_PCTRL_RXBL_2		1
++#define DMA_PCTRL_RXBL_4		2
+ #define DMA_PCTRL_RXBL_8		3
+ #define DMA_PCTRL_TXBL			GENMASK(5, 4)
++#define DMA_PCTRL_TXBL_2		1
++#define DMA_PCTRL_TXBL_4		2
+ #define DMA_PCTRL_TXBL_8		3
+ #define DMA_PCTRL_PDEN			BIT(6)
+ #define DMA_PCTRL_RXBL32		BIT(7)
+@@ -142,6 +146,8 @@
+ #define DMA_ORRC_MAX_CNT		(SZ_32 - 1)
+ #define DMA_DFT_POLL_CNT		SZ_4
+ #define DMA_DFT_BURST_V22		SZ_2
++#define DMA_BURSTL_2DW			SZ_2
++#define DMA_BURSTL_4DW			SZ_4
+ #define DMA_BURSTL_8DW			SZ_8
+ #define DMA_BURSTL_16DW			SZ_16
+ #define DMA_BURSTL_32DW			SZ_32
+@@ -835,15 +841,23 @@ static int ldma_port_cfg(struct ldma_port *p)
+ 			reg |= DMA_PCTRL_TXBL32;
+ 		else if (p->txbl == DMA_BURSTL_16DW)
+ 			reg |= DMA_PCTRL_TXBL16;
++		else if (p->txbl == DMA_BURSTL_8DW)
++			reg |= DMA_PCTRL_TXBL_8;
++		else if (p->txbl == DMA_BURSTL_4DW)
++			reg |= DMA_PCTRL_TXBL_4;
+ 		else
+-			reg |= FIELD_PREP(DMA_PCTRL_TXBL, DMA_PCTRL_TXBL_8);
++			reg |= FIELD_PREP(DMA_PCTRL_TXBL, DMA_PCTRL_TXBL_2);
+ 
+ 		if (p->rxbl == DMA_BURSTL_32DW)
+ 			reg |= DMA_PCTRL_RXBL32;
+ 		else if (p->rxbl == DMA_BURSTL_16DW)
+ 			reg |= DMA_PCTRL_RXBL16;
++		else if (p->rxbl == DMA_BURSTL_8DW)
++			reg |= DMA_PCTRL_RXBL_8;
++		else if (p->rxbl == DMA_BURSTL_4DW)
++			reg |= DMA_PCTRL_RXBL_4;
+ 		else
+-			reg |= FIELD_PREP(DMA_PCTRL_RXBL, DMA_PCTRL_RXBL_8);
++			reg |= FIELD_PREP(DMA_PCTRL_RXBL, DMA_PCTRL_RXBL_2);
+ 	}
+ 
+ 	spin_lock_irqsave(&d->dev_lock, flags);
+@@ -1550,6 +1564,9 @@ static const struct ldma_inst_data toe_dma31 = {
+ };
+ 
+ static const struct of_device_id intel_ldma_match[] = {
++	{ .compatible = "lantiq,xrx200-dma", .data = &dma0},
++	{ .compatible = "lantiq,xrx300-dma", .data = &dma0},
++	{ .compatible = "lantiq,xrx330-dma", .data = &dma0},
+ 	{ .compatible = "intel,lgm-cdma", .data = &dma0},
+ 	{ .compatible = "intel,lgm-dma2tx", .data = &dma2tx},
+ 	{ .compatible = "intel,lgm-dma1rx", .data = &dma1rx},
+diff --git a/drivers/net/ethernet/lantiq_xrx200.c b/drivers/net/ethernet/lantiq_xrx200.c
+index 41c2ad210bc9..ddeffc8d58ca 100644
+--- a/drivers/net/ethernet/lantiq_xrx200.c
++++ b/drivers/net/ethernet/lantiq_xrx200.c
+@@ -13,16 +13,13 @@
+ #include <linux/interrupt.h>
+ #include <linux/clk.h>
+ #include <linux/delay.h>
++#include <linux/dmaengine.h>
+ 
+ #include <linux/of_net.h>
+ #include <linux/of_platform.h>
+ 
+-#include <xway_dma.h>
+-
+ /* DMA */
+ #define XRX200_DMA_DATA_LEN	0x600
+-#define XRX200_DMA_RX		0
+-#define XRX200_DMA_TX		1
+ 
+ /* cpu port mac */
+ #define PMAC_RX_IPG		0x0024
+@@ -56,8 +53,7 @@ struct xrx200_chan {
+ 	int tx_free;
+ 
+ 	struct napi_struct napi;
+-	struct ltq_dma_channel dma;
+-	struct sk_buff *skb[LTQ_DESC_NUM];
++	struct dma_chan *dma;
+ 
+ 	struct xrx200_priv *priv;
+ };
+@@ -97,19 +93,7 @@ static void xrx200_pmac_mask(struct xrx200_priv *priv, u32 clear, u32 set,
+ /* drop all the packets from the DMA ring */
+ static void xrx200_flush_dma(struct xrx200_chan *ch)
+ {
+-	int i;
+-
+-	for (i = 0; i < LTQ_DESC_NUM; i++) {
+-		struct ltq_dma_desc *desc = &ch->dma.desc_base[ch->dma.desc];
+-
+-		if ((desc->ctl & (LTQ_DMA_OWN | LTQ_DMA_C)) != LTQ_DMA_C)
+-			break;
+ 
+-		desc->ctl = LTQ_DMA_OWN | LTQ_DMA_RX_OFFSET(NET_IP_ALIGN) |
+-			    XRX200_DMA_DATA_LEN;
+-		ch->dma.desc++;
+-		ch->dma.desc %= LTQ_DESC_NUM;
+-	}
+ }
+ 
+ static int xrx200_open(struct net_device *net_dev)
+@@ -117,11 +101,8 @@ static int xrx200_open(struct net_device *net_dev)
+ 	struct xrx200_priv *priv = netdev_priv(net_dev);
+ 
+ 	napi_enable(&priv->chan_tx.napi);
+-	ltq_dma_open(&priv->chan_tx.dma);
+-	ltq_dma_enable_irq(&priv->chan_tx.dma);
+ 
+ 	napi_enable(&priv->chan_rx.napi);
+-	ltq_dma_open(&priv->chan_rx.dma);
+ 	/* The boot loader does not always deactivate the receiving of frames
+ 	 * on the ports and then some packets queue up in the PPE buffers.
+ 	 * They already passed the PMAC so they do not have the tags
+@@ -130,7 +111,6 @@ static int xrx200_open(struct net_device *net_dev)
+ 	 */
+ 	usleep_range(20, 40);
+ 	xrx200_flush_dma(&priv->chan_rx);
+-	ltq_dma_enable_irq(&priv->chan_rx.dma);
+ 
+ 	netif_wake_queue(net_dev);
+ 
+@@ -144,68 +124,12 @@ static int xrx200_close(struct net_device *net_dev)
+ 	netif_stop_queue(net_dev);
+ 
+ 	napi_disable(&priv->chan_rx.napi);
+-	ltq_dma_close(&priv->chan_rx.dma);
++	if(priv->chan_rx.dma)
++		dma_release_channel(priv->chan_rx.dma);
+ 
+ 	napi_disable(&priv->chan_tx.napi);
+-	ltq_dma_close(&priv->chan_tx.dma);
+-
+-	return 0;
+-}
+-
+-static int xrx200_alloc_skb(struct xrx200_chan *ch)
+-{
+-	int ret = 0;
+-
+-	ch->skb[ch->dma.desc] = netdev_alloc_skb_ip_align(ch->priv->net_dev,
+-							  XRX200_DMA_DATA_LEN);
+-	if (!ch->skb[ch->dma.desc]) {
+-		ret = -ENOMEM;
+-		goto skip;
+-	}
+-
+-	ch->dma.desc_base[ch->dma.desc].addr = dma_map_single(ch->priv->dev,
+-			ch->skb[ch->dma.desc]->data, XRX200_DMA_DATA_LEN,
+-			DMA_FROM_DEVICE);
+-	if (unlikely(dma_mapping_error(ch->priv->dev,
+-				       ch->dma.desc_base[ch->dma.desc].addr))) {
+-		dev_kfree_skb_any(ch->skb[ch->dma.desc]);
+-		ret = -ENOMEM;
+-		goto skip;
+-	}
+-
+-skip:
+-	ch->dma.desc_base[ch->dma.desc].ctl =
+-		LTQ_DMA_OWN | LTQ_DMA_RX_OFFSET(NET_IP_ALIGN) |
+-		XRX200_DMA_DATA_LEN;
+-
+-	return ret;
+-}
+-
+-static int xrx200_hw_receive(struct xrx200_chan *ch)
+-{
+-	struct xrx200_priv *priv = ch->priv;
+-	struct ltq_dma_desc *desc = &ch->dma.desc_base[ch->dma.desc];
+-	struct sk_buff *skb = ch->skb[ch->dma.desc];
+-	int len = (desc->ctl & LTQ_DMA_SIZE_MASK);
+-	struct net_device *net_dev = priv->net_dev;
+-	int ret;
+-
+-	ret = xrx200_alloc_skb(ch);
+-
+-	ch->dma.desc++;
+-	ch->dma.desc %= LTQ_DESC_NUM;
+-
+-	if (ret) {
+-		netdev_err(net_dev, "failed to allocate new rx buffer\n");
+-		return ret;
+-	}
+-
+-	skb_put(skb, len);
+-	skb->protocol = eth_type_trans(skb, net_dev);
+-	netif_receive_skb(skb);
+-	net_dev->stats.rx_packets++;
+-	net_dev->stats.rx_bytes += len - ETH_FCS_LEN;
+-
++	if(priv->chan_tx.dma)
++		dma_release_channel(priv->chan_tx.dma);
+ 	return 0;
+ }
+ 
+@@ -214,24 +138,14 @@ static int xrx200_poll_rx(struct napi_struct *napi, int budget)
+ 	struct xrx200_chan *ch = container_of(napi,
+ 				struct xrx200_chan, napi);
+ 	int rx = 0;
+-	int ret;
+ 
+ 	while (rx < budget) {
+-		struct ltq_dma_desc *desc = &ch->dma.desc_base[ch->dma.desc];
+-
+-		if ((desc->ctl & (LTQ_DMA_OWN | LTQ_DMA_C)) == LTQ_DMA_C) {
+-			ret = xrx200_hw_receive(ch);
+-			if (ret)
+-				return ret;
+-			rx++;
+-		} else {
+-			break;
+-		}
++		break;
+ 	}
+ 
+ 	if (rx < budget) {
+ 		if (napi_complete_done(&ch->napi, rx))
+-			ltq_dma_enable_irq(&ch->dma);
++			;
+ 	}
+ 
+ 	return rx;
+@@ -239,99 +153,14 @@ static int xrx200_poll_rx(struct napi_struct *napi, int budget)
+ 
+ static int xrx200_tx_housekeeping(struct napi_struct *napi, int budget)
+ {
+-	struct xrx200_chan *ch = container_of(napi,
+-				struct xrx200_chan, napi);
+-	struct net_device *net_dev = ch->priv->net_dev;
+-	int pkts = 0;
+-	int bytes = 0;
+-
+-	netif_tx_lock(net_dev);
+-	while (pkts < budget) {
+-		struct ltq_dma_desc *desc = &ch->dma.desc_base[ch->tx_free];
+-
+-		if ((desc->ctl & (LTQ_DMA_OWN | LTQ_DMA_C)) == LTQ_DMA_C) {
+-			struct sk_buff *skb = ch->skb[ch->tx_free];
+-
+-			pkts++;
+-			bytes += skb->len;
+-			ch->skb[ch->tx_free] = NULL;
+-			consume_skb(skb);
+-			memset(&ch->dma.desc_base[ch->tx_free], 0,
+-			       sizeof(struct ltq_dma_desc));
+-			ch->tx_free++;
+-			ch->tx_free %= LTQ_DESC_NUM;
+-		} else {
+-			break;
+-		}
+-	}
+-
+-	net_dev->stats.tx_packets += pkts;
+-	net_dev->stats.tx_bytes += bytes;
+-	netdev_completed_queue(ch->priv->net_dev, pkts, bytes);
+-
+-	netif_tx_unlock(net_dev);
+-	if (netif_queue_stopped(net_dev))
+-		netif_wake_queue(net_dev);
+-
+-	if (pkts < budget) {
+-		if (napi_complete_done(&ch->napi, pkts))
+-			ltq_dma_enable_irq(&ch->dma);
+-	}
+ 
+-	return pkts;
++	return 0;
+ }
+ 
+ static netdev_tx_t xrx200_start_xmit(struct sk_buff *skb,
+ 				     struct net_device *net_dev)
+ {
+-	struct xrx200_priv *priv = netdev_priv(net_dev);
+-	struct xrx200_chan *ch = &priv->chan_tx;
+-	struct ltq_dma_desc *desc = &ch->dma.desc_base[ch->dma.desc];
+-	u32 byte_offset;
+-	dma_addr_t mapping;
+-	int len;
+-
+-	skb->dev = net_dev;
+-	if (skb_put_padto(skb, ETH_ZLEN)) {
+-		net_dev->stats.tx_dropped++;
+-		return NETDEV_TX_OK;
+-	}
+-
+-	len = skb->len;
+-
+-	if ((desc->ctl & (LTQ_DMA_OWN | LTQ_DMA_C)) || ch->skb[ch->dma.desc]) {
+-		netdev_err(net_dev, "tx ring full\n");
+-		netif_stop_queue(net_dev);
+-		return NETDEV_TX_BUSY;
+-	}
+-
+-	ch->skb[ch->dma.desc] = skb;
+-
+-	mapping = dma_map_single(priv->dev, skb->data, len, DMA_TO_DEVICE);
+-	if (unlikely(dma_mapping_error(priv->dev, mapping)))
+-		goto err_drop;
+-
+-	/* dma needs to start on a 16 byte aligned address */
+-	byte_offset = mapping % 16;
+ 
+-	desc->addr = mapping - byte_offset;
+-	/* Make sure the address is written before we give it to HW */
+-	wmb();
+-	desc->ctl = LTQ_DMA_OWN | LTQ_DMA_SOP | LTQ_DMA_EOP |
+-		LTQ_DMA_TX_OFFSET(byte_offset) | (len & LTQ_DMA_SIZE_MASK);
+-	ch->dma.desc++;
+-	ch->dma.desc %= LTQ_DESC_NUM;
+-	if (ch->dma.desc == ch->tx_free)
+-		netif_stop_queue(net_dev);
+-
+-	netdev_sent_queue(net_dev, len);
+-
+-	return NETDEV_TX_OK;
+-
+-err_drop:
+-	dev_kfree_skb(skb);
+-	net_dev->stats.tx_dropped++;
+-	net_dev->stats.tx_errors++;
+ 	return NETDEV_TX_OK;
+ }
+ 
+@@ -343,89 +172,32 @@ static const struct net_device_ops xrx200_netdev_ops = {
+ 	.ndo_validate_addr	= eth_validate_addr,
+ };
+ 
+-static irqreturn_t xrx200_dma_irq(int irq, void *ptr)
+-{
+-	struct xrx200_chan *ch = ptr;
+-
+-	if (napi_schedule_prep(&ch->napi)) {
+-		__napi_schedule(&ch->napi);
+-		ltq_dma_disable_irq(&ch->dma);
+-	}
+-
+-	ltq_dma_ack_irq(&ch->dma);
+-
+-	return IRQ_HANDLED;
+-}
+-
+ static int xrx200_dma_init(struct xrx200_priv *priv)
+ {
++	struct device *dev = priv->dev;
+ 	struct xrx200_chan *ch_rx = &priv->chan_rx;
+ 	struct xrx200_chan *ch_tx = &priv->chan_tx;
+ 	int ret = 0;
+-	int i;
+ 
+-	ltq_dma_init_port(DMA_PORT_ETOP);
+-
+-	ch_rx->dma.nr = XRX200_DMA_RX;
+-	ch_rx->dma.dev = priv->dev;
+ 	ch_rx->priv = priv;
+ 
+-	ltq_dma_alloc_rx(&ch_rx->dma);
+-	for (ch_rx->dma.desc = 0; ch_rx->dma.desc < LTQ_DESC_NUM;
+-	     ch_rx->dma.desc++) {
+-		ret = xrx200_alloc_skb(ch_rx);
+-		if (ret)
+-			goto rx_free;
+-	}
+-	ch_rx->dma.desc = 0;
+-	ret = devm_request_irq(priv->dev, ch_rx->dma.irq, xrx200_dma_irq, 0,
+-			       "xrx200_net_rx", &priv->chan_rx);
+-	if (ret) {
+-		dev_err(priv->dev, "failed to request RX irq %d\n",
+-			ch_rx->dma.irq);
+-		goto rx_ring_free;
+-	}
++	ch_rx->dma = dma_request_chan(dev, "rx");
++	if(IS_ERR(ch_rx->dma))
++		return dev_err_probe(dev, PTR_ERR(ch_tx->dma),
++				     "failed to request DMA rx chan!.\n");
+ 
+-	ch_tx->dma.nr = XRX200_DMA_TX;
+-	ch_tx->dma.dev = priv->dev;
+ 	ch_tx->priv = priv;
+ 
+-	ltq_dma_alloc_tx(&ch_tx->dma);
+-	ret = devm_request_irq(priv->dev, ch_tx->dma.irq, xrx200_dma_irq, 0,
+-			       "xrx200_net_tx", &priv->chan_tx);
+-	if (ret) {
+-		dev_err(priv->dev, "failed to request TX irq %d\n",
+-			ch_tx->dma.irq);
+-		goto tx_free;
+-	}
++	ch_tx->dma = dma_request_chan(dev, "tx");
++	if(IS_ERR(ch_tx->dma))
++		return dev_err_probe(dev, PTR_ERR(ch_tx->dma),
++				     "failed to request DMA tx chan!.\n");
+ 
+ 	return ret;
+-
+-tx_free:
+-	ltq_dma_free(&ch_tx->dma);
+-
+-rx_ring_free:
+-	/* free the allocated RX ring */
+-	for (i = 0; i < LTQ_DESC_NUM; i++) {
+-		if (priv->chan_rx.skb[i])
+-			dev_kfree_skb_any(priv->chan_rx.skb[i]);
+-	}
+-
+-rx_free:
+-	ltq_dma_free(&ch_rx->dma);
+-	return ret;
+ }
+ 
+ static void xrx200_hw_cleanup(struct xrx200_priv *priv)
+ {
+-	int i;
+-
+-	ltq_dma_free(&priv->chan_tx.dma);
+-	ltq_dma_free(&priv->chan_rx.dma);
+-
+-	/* free the allocated RX ring */
+-	for (i = 0; i < LTQ_DESC_NUM; i++)
+-		dev_kfree_skb_any(priv->chan_rx.skb[i]);
+ }
+ 
+ static int xrx200_probe(struct platform_device *pdev)
+@@ -462,13 +234,6 @@ static int xrx200_probe(struct platform_device *pdev)
+ 	if (IS_ERR(priv->pmac_reg))
+ 		return PTR_ERR(priv->pmac_reg);
+ 
+-	priv->chan_rx.dma.irq = platform_get_irq_byname(pdev, "rx");
+-	if (priv->chan_rx.dma.irq < 0)
+-		return -ENOENT;
+-	priv->chan_tx.dma.irq = platform_get_irq_byname(pdev, "tx");
+-	if (priv->chan_tx.dma.irq < 0)
+-		return -ENOENT;
+-
+ 	/* get the clock */
+ 	priv->clk = devm_clk_get(dev, NULL);
+ 	if (IS_ERR(priv->clk)) {
+-- 
+2.20.1
+
