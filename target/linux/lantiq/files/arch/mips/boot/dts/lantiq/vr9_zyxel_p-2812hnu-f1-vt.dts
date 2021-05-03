@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+#include "vr9_zyxel_p-2812hnu-f1.dtsi"
+
+/ {
+	compatible = "zyxel,p-2812hnu-f1-vt", "zyxel,p-2812hnu", "lantiq,xway", "lantiq,vr9";
+	model = "ZyXEL P-2812HNU-F1 vT";
+};
+
+&pcie0 {
+	wifi@1814,3092 {
+		compatible = "pci1814,3092";
+		reg = <0x7000 0 0 0 0>;
+		ralink,eeprom = "RT3092.eeprom";
+	};
+};

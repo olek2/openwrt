@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+#include "vr9_zyxel_p-2812hnu-fx.dtsi"
+
+/ {
+	compatible = "zyxel,p-2812hnu-f1", "zyxel,p-2812hnu", "lantiq,xway", "lantiq,vr9";
+	model = "ZyXEL P-2812HNU-F1";
+
+};
+
+&localbus {
+	flash@0 {
+		compatible = "lantiq,nand-xway";
+		lantiq,cs = <1>;
+		bank-width = <2>;
+		reg = <0 0x0 0x2000000>;
+
+		pinctrl-0 = <&nand_pins>, <&nand_cs1_pins>;
+		pinctrl-names = "default";
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "uboot";
+				reg = <0x00000 0x40000>;
+			};
+			partition@40000 {
+				label = "u-boot-env";
+				reg = <0x40000 0x20000>;
+			};
+			partition@60000 {
+				label = "kernel";
+				reg = <0x60000 0x300000>;
+			};
+			partition@360000 {
+				label = "ubi";
+				reg = <0x360000 0x7ca0000>;
+			};
+		};
+	};
+};

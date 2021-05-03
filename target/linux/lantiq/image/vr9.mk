@@ -247,6 +247,16 @@ define Device/zyxel_p-2812hnu-f1
 endef
 TARGET_DEVICES += zyxel_p-2812hnu-f1
 
+define Device/zyxel_p-2812hnu-f1-vt
+  $(Device/NAND)
+  DEVICE_VENDOR := ZyXEL
+  DEVICE_MODEL := P-2812HNU
+  DEVICE_VARIANT := F1 vT
+  DEVICE_PACKAGES := kmod-rt2800-pci wpad-basic-wolfssl kmod-usb-dwc2 kmod-usb-ledtrig-usbport
+  KERNEL_SIZE := 3072k
+endef
+TARGET_DEVICES += zyxel_p-2812hnu-f1-vt
+
 define Device/zyxel_p-2812hnu-f3
   $(Device/NAND)
   DEVICE_VENDOR := ZyXEL
