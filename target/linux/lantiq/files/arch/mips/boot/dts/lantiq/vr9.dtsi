@@ -490,7 +490,7 @@
 			compatible = "lantiq,xrx200-net";
 			reg = <0xe10b308 0x30>; /* pmac */
 			interrupt-parent = <&icu0>;
-			dmas = <&dma0 0>, <&dma0 1>;
+			dmas = <&dma0 0 0 4>, <&dma0 1 0 4>;
 			dma-names = "rx", "tx";
 			resets = <&reset0 21 16>, <&reset0 8 8>, <&reset0 3 3>;
 			reset-names = "switch", "ppe", "ppe_dsp";
