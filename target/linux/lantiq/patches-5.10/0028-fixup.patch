@@ -1,0 +1,77 @@
+From e5f8f569ace753d089d035275c90b57098337751 Mon Sep 17 00:00:00 2001
+From: Aleksander Jan Bajkowski <A.Bajkowski@stud.elka.pw.edu.pl>
+Date: Wed, 5 May 2021 19:33:57 +0200
+Subject: [PATCH] fixup
+
+---
+ drivers/dma/lgm/lgm-dma.c            | 1 +
+ drivers/net/ethernet/lantiq_xrx200.c | 8 +++++++-
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/dma/lgm/lgm-dma.c b/drivers/dma/lgm/lgm-dma.c
+index d54b3a557c56..5bf99275817e 100644
+--- a/drivers/dma/lgm/lgm-dma.c
++++ b/drivers/dma/lgm/lgm-dma.c
+@@ -1295,6 +1295,7 @@ static int ldma_alloc_chan_resources(struct dma_chan *chan)
+ 	if (c->desc_pool)
+ 		return c->desc_num;
+ 
++	printk("%s: desc_num=%d\n", __func__, c->desc_num);
+ 	desc_sz = c->desc_num * sizeof(struct dw2_desc);
+ 	c->desc_pool = dma_pool_create(c->name, dev, desc_sz,
+ 				       __alignof__(struct dw2_desc), 0);
+diff --git a/drivers/net/ethernet/lantiq_xrx200.c b/drivers/net/ethernet/lantiq_xrx200.c
+index 237499be60e6..ecfcb943ca12 100644
+--- a/drivers/net/ethernet/lantiq_xrx200.c
++++ b/drivers/net/ethernet/lantiq_xrx200.c
+@@ -166,6 +166,7 @@ static netdev_tx_t xrx200_start_xmit(struct sk_buff *skb,
+ 	dma_addr_t mapping;
+ 	int len;
+ 
++	printk("%s:send pkt\n", __func__);
+ 	if (skb_put_padto(skb, ETH_ZLEN)) {
+ 		net_dev->stats.tx_dropped++;
+ 		return NETDEV_TX_OK;
+@@ -173,18 +174,22 @@ static netdev_tx_t xrx200_start_xmit(struct sk_buff *skb,
+ 
+ 	len = skb->len;
+ 
++	printk("%s:2\n", __func__);
+ 	mapping = dma_map_single(priv->dev, skb->data, len, DMA_TO_DEVICE);
+ 	if (unlikely(dma_mapping_error(priv->dev, mapping)))
+ 		goto err_drop;
+ 
++	printk("%s:3\n", __func__);
+ 	tx = dmaengine_prep_slave_single(ch, mapping, len, DMA_DEV_TO_MEM, 0);
+ 	if (tx) {
+ 		dmaengine_submit(tx);
+ 		dma_async_issue_pending(ch);
+ 	}
+ 
++	printk("%s:4\n", __func__);
+ 	netdev_sent_queue(net_dev, len);
+ 
++	printk("%s:5\n", __func__);
+ 	return NETDEV_TX_OK;
+ 
+ err_drop:
+@@ -213,7 +218,7 @@ static int xrx200_dma_init(struct xrx200_priv *priv)
+ 
+ 	ch_rx->dma = dma_request_chan(dev, "rx");
+ 	if(IS_ERR(ch_rx->dma))
+-		return dev_err_probe(dev, PTR_ERR(ch_tx->dma),
++		return dev_err_probe(dev, PTR_ERR(ch_rx->dma),
+ 				     "failed to request DMA rx chan!.\n");
+ 
+ 	ch_tx->priv = priv;
+@@ -304,6 +309,7 @@ static int xrx200_probe(struct platform_device *pdev)
+ 	if (err)
+ 		goto err_unprepare_clk;
+ 
++	printk("%s:init succeed\n", __func__);
+ 	return 0;
+ 
+ err_unprepare_clk:
+-- 
+2.30.2
+

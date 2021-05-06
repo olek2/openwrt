@@ -383,7 +383,7 @@
 			reg = <0xe103100 0xf00>;
 		};
 
-		dma0: dma@e104100 {
+		dma0: dma-controller@e104100 {
 			compatible = "lantiq,xrx200-dma";
 			reg = <0xe104100 0x800>;
 			resets = <&reset0 5 5>;
